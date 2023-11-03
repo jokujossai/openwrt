@@ -33,6 +33,10 @@ define Build/cybertan-trx
 	-rm $@-empty.bin
 endef
 
+define Build/dlink-sge-signature
+	$(TOPDIR)/scripts/dlink-sge-signature.py $@ $(1)
+endef
+
 define Build/edimax-headers
 	$(eval edimax_magic=$(word 1,$(1)))
 	$(eval edimax_model=$(word 2,$(1)))
@@ -1012,10 +1016,12 @@ define Device/dlink_covr-p2500-a1
 	lzma | uImage lzma
   KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x68737173
   IMAGE_SIZE := 14528k
-  IMAGES += recovery.bin
+  IMAGES += factory.bin recovery.bin
   IMAGE/recovery.bin := append-kernel | pad-to $$$$(BLOCKSIZE) | \
 	append-rootfs | pad-rootfs | check-size | pad-to 14528k | \
 	append-loader-okli-uimage $(1) | pad-to 15616k
+  IMAGE/factory.bin := $$(IMAGE/recovery.bin) | \
+	dlink-sge-image COVR-P2500 | dlink-sge-signature COVR-P2500
 endef
 TARGET_DEVICES += dlink_covr-p2500-a1
 
