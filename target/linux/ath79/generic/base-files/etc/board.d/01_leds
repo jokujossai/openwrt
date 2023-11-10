@@ -230,6 +230,9 @@ devolo,dlan-pro-1200plus-ac|\
 devolo,magic-2-wifi)
 	ucidef_set_led_netdev "plcw" "dLAN" "white:dlan" "eth0.1" "rx"
 	;;
+dlink,covr-c1200-a1)
+	# TODO: Check if correct
+	ucidef_set_led_switch "lan" "LAN" "green:lan"
 dlink,covr-p2500-a1)
 	ucidef_set_led_switch "lan" "LAN" "green:lan" "switch0" "0x0e" "" "link"
 	;;
