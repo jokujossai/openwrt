@@ -1008,13 +1008,15 @@ TARGET_DEVICES += devolo_magic-2-wifi
 
 define Device/dlink_covr-p2500-a1
   $(Device/loader-okli-uimage)
+  $(Device/dsa-migration)
   SOC := qca9563
   DEVICE_VENDOR := D-Link
   DEVICE_MODEL := COVR-P2500
   DEVICE_VARIANT := A1
   DEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca9888-ct \
 	open-plc-utils open-plc-utils-hpavkey open-plc-utils-modpib \
-	open-plc-utils-plchost open-plc-utils-plctool
+	open-plc-utils-plchost open-plc-utils-plctool \
+	-swconfig mdio-tools ethtool
   LOADER_FLASH_OFFS := 0x050000
   LOADER_KERNEL_MAGIC := 0x68737173
   KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x68737173

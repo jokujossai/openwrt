@@ -24,6 +24,11 @@ define Build/loader-kernel
 		BOARD="$(DEVICE_NAME)" )
 endef
 
+define Device/dsa-migration
+	DEVICE_COMPAT_VERSION := 1.1
+	DEVICE_COMPAT_MESSAGE := Config cannot be migrated from swconfig to DSA
+endef
+
 define Build/loader-okli-compile
 	$(call Build/loader-common, \
 		FLASH_OFFS=$(LOADER_FLASH_OFFS) \
