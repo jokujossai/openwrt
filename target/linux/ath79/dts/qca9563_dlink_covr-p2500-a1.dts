@@ -149,6 +149,30 @@
 					};
 				};
 			};
+
+			partition@ff0020 {
+				label = "dlink-env";
+				reg = <0xff0020 0x400>;
+				read-only;
+
+				compatible = "ascii,env";
+
+				protest_plc_mac: protest_plc_mac {
+					#nvmem-cell-cells = <1>;
+				};
+
+				protest_lan_mac: protest_lan_mac {
+					#nvmem-cell-cells = <1>;
+				};
+
+				protest_ath0_mac: protest_ath0_mac {
+					#nvmem-cell-cells = <1>;
+				};
+
+				protest_ath1_mac: protest_ath1_mac {
+					#nvmem-cell-cells = <1>;
+				};
+			};
 		};
 	};
 };
@@ -160,8 +184,8 @@
 		compatible = "qcom,ath10k";
 		reg = <0 0 0 0 0>;
 
-		nvmem-cells = <&precalibration_ath10k>;
-		nvmem-cell-names = "pre-calibration";
+		nvmem-cells = <&precalibration_ath10k>, <&protest_ath0_mac 0>;
+		nvmem-cell-names = "pre-calibration", "mac-address";
 	};
 };
 
@@ -201,11 +225,14 @@
 
 	phy-mode = "sgmii";
 	phy-handle = <&phy0>;
+
+	nvmem-cells = <&protest_lan_mac 0>;
+	nvmem-cell-names = "mac-address";
 };
 
 &wmac {
 	status = "okay";
 
-	nvmem-cells = <&calibration_ath9k>;
-	nvmem-cell-names = "calibration";
+	nvmem-cells = <&calibration_ath9k>, <&protest_ath1_mac 0>;
+	nvmem-cell-names = "calibration", "mac-address";
 };

@@ -1,0 +1,271 @@
+--- a/drivers/nvmem/Kconfig
++++ b/drivers/nvmem/Kconfig
+@@ -417,5 +417,16 @@ config NVMEM_QORIQ_EFUSE
+ 
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called nvmem_qoriq_efuse.
++
++config NVMEM_ASCII_ENV
++	tristate "ASCII environment variables support"
++	depends on OF && MTD
++	select GENERIC_NET_UTILS
++	help
++	  This driver adds support for exporting ASCII environment
++	  variables and also exposes variables as NVMEM cells so they
++	  can be referenced by other drivers
++
++	  Currently this driver works only with env variables on top of MTD.
+ 
+ endif
+--- a/drivers/nvmem/Makefile
++++ b/drivers/nvmem/Makefile
+@@ -81,3 +81,5 @@
+ nvmem_zynqmp_nvmem-y			:= zynqmp_nvmem.o
+ obj-$(CONFIG_NVMEM_QORIQ_EFUSE)		+= nvmem-qoriq-efuse.o
+ nvmem-qoriq-efuse-y			:= qoriq-efuse.o
++obj-$(CONFIG_NVMEM_ASCII_ENV)			+= nvmem_ascii-env.o
++nvmem_ascii-env-y				:= ascii-env.o
+--- /dev/null
++++ b/drivers/nvmem/ascii-env.c
+@@ -0,0 +1,229 @@
++// SPDX-License-Identifier: MIT
++/*
++ * Copyright (C) 2023 Daniel Linjama <daniel@dev.linjama.com>
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the “Software”), to deal in the
++ * Software without restriction, including without limitation the rights to use, copy,
++ * modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so, subject to the
++ * following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
++ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
++ * PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
++ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
++ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
++ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++#include <linux/etherdevice.h>
++#include <linux/if_ether.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/mtd/mtd.h>
++#include <linux/nvmem-consumer.h>
++#include <linux/nvmem-provider.h>
++#include <linux/of_device.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++
++struct ascii_env {
++	struct device *dev;
++
++	struct mtd_info *mtd;
++
++	/* Cells */
++	struct nvmem_cell_info *cells;
++	int ncells;
++};
++
++static int ascii_env_read(void *context, unsigned int offset, void *val,
++			   size_t bytes)
++{
++	struct ascii_env *priv = context;
++	struct device *dev = priv->dev;
++	size_t bytes_read;
++	int err;
++	pr_err("ascii_env_read\n");
++
++	err = mtd_read(priv->mtd, offset, bytes, &bytes_read, val);
++	if (err && !mtd_is_bitflip(err)) {
++		dev_err(dev, "Failed to read from mtd: %d\n", err);
++		return err;
++	}
++
++	if (bytes_read != bytes) {
++		dev_err(dev, "Failed to read %zu bytes\n", bytes);
++		return -EIO;
++	}
++
++	return 0;
++}
++
++static int ascii_env_read_post_process_ethaddr(void *context, const char *id, int index,
++						unsigned int offset, void *buf, size_t bytes)
++{
++	u8 mac[ETH_ALEN];
++	pr_err("ascii_env_read_post_process_ethaddr\n");
++
++	if (bytes != 3 * ETH_ALEN - 1)
++		return -EINVAL;
++
++	if (!mac_pton(buf, mac))
++		return -EINVAL;
++
++	if (index)
++		eth_addr_add(mac, index);
++
++	ether_addr_copy(buf, mac);
++	pr_err("mac: %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++
++	return 0;
++}
++
++static int ascii_env_add_cells(struct ascii_env *priv, uint8_t *buf,
++				size_t data_offset, size_t data_len)
++{
++	struct device *dev = priv->dev;
++	char *data = buf + data_offset;
++	char *var, *value, *eq;
++	int idx;
++	pr_err("ascii_env_add_cells\n");
++
++	// Skip leading 0xFF bytes
++	for(; *data == '\xFF'; data++, data_offset++);
++
++	priv->ncells = 0;
++	for (var = data; var < data + data_len && *var; var = strchr(var, '\n') + 1)
++		priv->ncells++;
++
++	priv->cells = devm_kcalloc(dev, priv->ncells, sizeof(*priv->cells), GFP_KERNEL);
++	if (!priv->cells)
++		return -ENOMEM;
++
++	for (var = data, idx = 0;
++	     var < data + data_len && *var;
++	     var = value + strlen(value) + 1, idx++) {
++		eq = strchr(var, '=');
++		if (!eq)
++			break;
++		*eq = '\0';
++		value = eq + 1;
++		eq = strchr(value, '\n');
++		if (eq)
++			*eq = '\0';
++		pr_err("key: %s, value: %s\n", var, value);
++
++		priv->cells[idx].name = devm_kstrdup(dev, var, GFP_KERNEL);
++		if (!priv->cells[idx].name)
++			return -ENOMEM;
++		priv->cells[idx].offset = data_offset + value - data;
++		priv->cells[idx].bytes = strlen(value);
++		priv->cells[idx].np = of_get_child_by_name(dev->of_node, priv->cells[idx].name);
++		if (strstr(var, "_mac") != NULL) {
++			priv->cells[idx].raw_len = strlen(value);
++			priv->cells[idx].bytes = ETH_ALEN;
++			priv->cells[idx].read_post_process = ascii_env_read_post_process_ethaddr;
++		}
++		pr_err("name: %s, offset: %x, bytes: %d, np: %s, raw_len: %d, read_post_process: %x\n", priv->cells[idx].name, priv->cells[idx].offset, priv->cells[idx].bytes, priv->cells[idx].np, priv->cells[idx].raw_len, priv->cells[idx].read_post_process);
++	}
++
++	if (WARN_ON(idx != priv->ncells))
++		priv->ncells = idx;
++
++	return 0;
++}
++
++static int ascii_env_parse(struct ascii_env *priv)
++{
++	struct device *dev = priv->dev;
++	size_t data_offset;
++	size_t data_len;
++	size_t bytes;
++	uint8_t *buf;
++	int err;
++	pr_err("ascii_env_parse\n");
++
++	buf = kcalloc(1, priv->mtd->size, GFP_KERNEL);
++	if (!buf) {
++		err = -ENOMEM;
++		goto err_out;
++	}
++
++	err = mtd_read(priv->mtd, 0, priv->mtd->size, &bytes, buf);
++	if ((err && !mtd_is_bitflip(err)) || bytes != priv->mtd->size) {
++		dev_err(dev, "Failed to read from mtd: %d\n", err);
++		goto err_kfree;
++	}
++
++	data_offset = 0;
++	data_len = priv->mtd->size;
++
++	buf[priv->mtd->size - 1] = '\0';
++	err = ascii_env_add_cells(priv, buf, data_offset, data_len);
++	if (err)
++		dev_err(dev, "Failed to add cells: %d\n", err);
++
++err_kfree:
++	kfree(buf);
++err_out:
++	return err;
++}
++
++static int ascii_env_probe(struct platform_device *pdev)
++{
++	struct nvmem_config config = {
++		.name = "ascii-env",
++		.reg_read = ascii_env_read,
++	};
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct ascii_env *priv;
++	int err;
++	pr_err("ascii_env_probe\n");
++
++	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++	priv->dev = dev;
++
++	priv->mtd = of_get_mtd_device_by_node(np);
++	if (IS_ERR(priv->mtd)) {
++		dev_err_probe(dev, PTR_ERR(priv->mtd), "Failed to get %pOF MTD\n", np);
++		return PTR_ERR(priv->mtd);
++	}
++
++	err = ascii_env_parse(priv);
++	if (err)
++		return err;
++
++	config.dev = dev;
++	config.cells = priv->cells;
++	config.ncells = priv->ncells;
++	config.priv = priv;
++	config.size = priv->mtd->size;
++
++	return PTR_ERR_OR_ZERO(devm_nvmem_register(dev, &config));
++}
++
++static const struct of_device_id ascii_env_of_match_table[] = {
++	{ .compatible = "ascii,env" },
++	{},
++};
++
++static struct platform_driver ascii_env_driver = {
++	.probe = ascii_env_probe,
++	.driver = {
++		.name = "ascii_env",
++		.of_match_table = ascii_env_of_match_table,
++	},
++};
++module_platform_driver(ascii_env_driver);
++
++MODULE_AUTHOR("Daniel Linjama");
++MODULE_LICENSE("MIT");
++MODULE_DEVICE_TABLE(of, ascii_env_of_match_table);
+--- a/drivers/mtd/mtdcore.c
++++ b/drivers/mtd/mtdcore.c
+@@ -571,6 +571,9 @@ static int mtd_nvmem_add(struct mtd_info
+ 	    of_device_is_compatible(node, "brcm,env"))
+ 		return 0;
+ 
++	if(of_device_is_compatible(node, "ascii,env"))
++		return 0;
++
+ 	config.id = -1;
+ 	config.dev = &mtd->dev;
+ 	config.name = dev_name(&mtd->dev);

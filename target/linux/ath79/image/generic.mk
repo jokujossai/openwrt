@@ -1019,12 +1019,13 @@ define Device/dlink_covr-p2500-a1
   LOADER_KERNEL_MAGIC := 0x68737173
   KERNEL := kernel-bin | append-dtb | lzma | uImage lzma -M 0x68737173
   IMAGE_SIZE := 14528k
-  IMAGES += factory.bin recovery.bin
+  IMAGES += factory.bin recovery.bin kernel-raw.bin
   IMAGE/recovery.bin := append-kernel | pad-to $$$$(BLOCKSIZE) | \
 	append-rootfs | pad-rootfs | check-size | pad-to 14528k | \
 	append-loader-okli-uimage $(1) | pad-to 15616k
   IMAGE/factory.bin := $$(IMAGE/recovery.bin) | \
 	dlink-sge-image COVR-P2500 | dlink-sge-signature COVR-P2500
+  IMAGE/kernel-raw.bin := kernel-bin | append-dtb
 endef
 TARGET_DEVICES += dlink_covr-p2500-a1
 
